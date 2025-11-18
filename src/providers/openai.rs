@@ -419,7 +419,7 @@ impl OpenAIProvider {
                     let tool_results: Vec<_> = blocks.iter()
                         .filter_map(|block| {
                             if let crate::models::ContentBlock::ToolResult { tool_use_id, content } = block {
-                                Some((tool_use_id.clone(), content.clone()))
+                                Some((tool_use_id.clone(), content.to_string()))
                             } else {
                                 None
                             }

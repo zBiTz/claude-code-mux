@@ -60,6 +60,42 @@ pub struct SystemBlock {
 }
 
 
+/// Tool result content can be string or array of content blocks
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ToolResultContent {
+    Text(String),
+    Blocks(Vec<ToolResultBlock>),
+}
+
+impl ToolResultContent {
+    /// Convert to string (for OpenAI compatibility)
+    pub fn to_string(&self) -> String {
+        match self {
+            ToolResultContent::Text(s) => s.clone(),
+            ToolResultContent::Blocks(blocks) => {
+                blocks.iter()
+                    .filter_map(|block| match block {
+                        ToolResultBlock::Text { text } => Some(text.clone()),
+                        ToolResultBlock::Image { .. } => Some("[Image]".to_string()),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        }
+    }
+}
+
+/// Content blocks allowed in tool results
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type")]
+pub enum ToolResultBlock {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image")]
+    Image { source: ImageSource },
+}
+
 /// Content block for multimodal messages
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
@@ -79,7 +115,7 @@ pub enum ContentBlock {
     #[serde(rename = "tool_result")]
     ToolResult {
         tool_use_id: String,
-        content: String,
+        content: ToolResultContent,
     },
     #[serde(rename = "thinking")]
     Thinking {

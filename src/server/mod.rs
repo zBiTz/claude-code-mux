@@ -578,9 +578,17 @@ async fn handle_messages(
         .unwrap_or("unknown");
     info!("Received request for model: {}", model);
 
+    // DEBUG: Log request body for debugging
+    if let Ok(json_str) = serde_json::to_string_pretty(&request_json) {
+        tracing::debug!("📥 Incoming request body:\n{}", json_str);
+    }
+
     // 1. Parse request for routing decision (mutable for tag extraction)
     let mut request_for_routing: AnthropicRequest = serde_json::from_value(request_json.clone())
-        .map_err(|e| AppError::ParseError(format!("Invalid request format: {}", e)))?;
+        .map_err(|e| {
+            tracing::error!("❌ Failed to parse request: {}", e);
+            AppError::ParseError(format!("Invalid request format: {}", e))
+        })?;
 
     // 2. Route the request (may modify system prompt to remove CCM-SUBAGENT-MODEL tag)
     let decision = state
