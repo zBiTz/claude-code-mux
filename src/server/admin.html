@@ -4179,7 +4179,8 @@
                     const providerName =
                         document.querySelector('input[name="provider_name"]')
                             .value || "claude-max";
-                    const providerId = `${providerName}-oauth`;
+                    // Use provider name directly as the OAuth identifier (no -oauth suffix)
+                    const providerId = providerName;
 
                     console.log(
                         "🔐 Exchanging code with oauth_type:",
