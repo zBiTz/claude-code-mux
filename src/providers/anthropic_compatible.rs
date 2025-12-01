@@ -7,6 +7,9 @@ use std::pin::Pin;
 use futures::stream::Stream;
 use bytes::Bytes;
 
+/// Claude Code identifier required for OAuth authentication with Anthropic API
+const CLAUDE_CODE_IDENTIFIER: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+
 /// Generic Anthropic-compatible provider
 /// Works with: Anthropic, OpenRouter, z.ai, Minimax, etc.
 /// Any provider that accepts Anthropic Messages API format
@@ -195,6 +198,43 @@ impl AnthropicCompatibleProvider {
             token_store,
         )
     }
+
+    /// Inject Claude Code identifier into system prompt for OAuth requests
+    /// This is required by Anthropic's OAuth API for Claude Code Max authentication
+    fn inject_claude_code_system_prompt(&self, mut request: AnthropicRequest) -> AnthropicRequest {
+        // Only inject for OAuth authentication
+        if !self.is_oauth() {
+            return request;
+        }
+
+        use crate::models::{SystemPrompt, SystemBlock};
+
+        tracing::debug!("🔧 Injecting Claude Code identifier into system prompt for OAuth");
+
+        request.system = match request.system {
+            Some(SystemPrompt::Text(text)) => {
+                // Prepend identifier to existing text
+                let modified_text = format!("{}\n\n{}", CLAUDE_CODE_IDENTIFIER, text);
+                Some(SystemPrompt::Text(modified_text))
+            }
+            Some(SystemPrompt::Blocks(mut blocks)) => {
+                // Insert identifier as the first block
+                let identifier_block = SystemBlock {
+                    r#type: "text".to_string(),
+                    text: CLAUDE_CODE_IDENTIFIER.to_string(),
+                    cache_control: None,
+                };
+                blocks.insert(0, identifier_block);
+                Some(SystemPrompt::Blocks(blocks))
+            }
+            None => {
+                // Create new system prompt with just the identifier
+                Some(SystemPrompt::Text(CLAUDE_CODE_IDENTIFIER.to_string()))
+            }
+        };
+
+        request
+    }
 }
 
 #[async_trait]
@@ -204,6 +244,9 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
         // Get authentication header value (API key or OAuth token)
         let auth_value = self.get_auth_header().await?;
+
+        // Inject Claude Code system prompt for OAuth requests
+        let request = self.inject_claude_code_system_prompt(request);
 
         // Build request with authentication
         let mut req_builder = self.client
@@ -361,6 +404,9 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         // Get authentication header value
         let auth_value = self.get_auth_header().await?;
 
+        // Inject Claude Code system prompt for OAuth requests
+        let request = self.inject_claude_code_system_prompt(request);
+
         // Build request with authentication
         let mut req_builder = self.client
             .post(&url)
@@ -411,5 +457,156 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
     fn supports_model(&self, model: &str) -> bool {
         self.models.iter().any(|m| m == model)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{AnthropicRequest, Message, MessageContent, SystemPrompt, SystemBlock};
+
+    fn create_oauth_provider() -> AnthropicCompatibleProvider {
+        // Create a provider with OAuth configured (oauth_provider and token_store are Some)
+        // Note: We don't need real tokens for testing inject_claude_code_system_prompt
+        let temp_path = std::env::temp_dir().join("ccm_test_tokens.json");
+        let token_store = TokenStore::new(temp_path).ok();
+        AnthropicCompatibleProvider::new(
+            "test-oauth".to_string(),
+            "oauth-test-no-api-key".to_string(), // Explicit test value for OAuth (not used)
+            "https://api.anthropic.com".to_string(),
+            vec!["claude-sonnet-4-20250514".to_string()],
+            Some("anthropic-oauth".to_string()),
+            token_store,
+        )
+    }
+
+    fn create_api_key_provider() -> AnthropicCompatibleProvider {
+        // Create a provider with API key (no OAuth)
+        AnthropicCompatibleProvider::new(
+            "test-api-key".to_string(),
+            "test-api-key".to_string(),
+            "https://api.anthropic.com".to_string(),
+            vec!["claude-sonnet-4-20250514".to_string()],
+            None,
+            None,
+        )
+    }
+
+    fn create_base_request() -> AnthropicRequest {
+        AnthropicRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("Hello".to_string()),
+            }],
+            max_tokens: 1024,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+        }
+    }
+
+    #[test]
+    fn test_inject_system_prompt_oauth_with_no_system() {
+        let provider = create_oauth_provider();
+        let request = create_base_request();
+
+        let result = provider.inject_claude_code_system_prompt(request);
+
+        match result.system {
+            Some(SystemPrompt::Text(text)) => {
+                assert_eq!(text, CLAUDE_CODE_IDENTIFIER);
+            }
+            _ => panic!("Expected SystemPrompt::Text with Claude Code identifier"),
+        }
+    }
+
+    #[test]
+    fn test_inject_system_prompt_oauth_with_text_system() {
+        let provider = create_oauth_provider();
+        let mut request = create_base_request();
+        request.system = Some(SystemPrompt::Text("You are a helpful assistant.".to_string()));
+
+        let result = provider.inject_claude_code_system_prompt(request);
+
+        match result.system {
+            Some(SystemPrompt::Text(text)) => {
+                assert!(text.starts_with(CLAUDE_CODE_IDENTIFIER));
+                assert!(text.contains("You are a helpful assistant."));
+                assert!(text.contains("\n\n")); // Separator between identifier and original
+            }
+            _ => panic!("Expected SystemPrompt::Text with prepended Claude Code identifier"),
+        }
+    }
+
+    #[test]
+    fn test_inject_system_prompt_oauth_with_blocks_system() {
+        let provider = create_oauth_provider();
+        let mut request = create_base_request();
+        request.system = Some(SystemPrompt::Blocks(vec![
+            SystemBlock {
+                r#type: "text".to_string(),
+                text: "Original block content.".to_string(),
+                cache_control: None,
+            }
+        ]));
+
+        let result = provider.inject_claude_code_system_prompt(request);
+
+        match result.system {
+            Some(SystemPrompt::Blocks(blocks)) => {
+                assert_eq!(blocks.len(), 2);
+                assert_eq!(blocks[0].text, CLAUDE_CODE_IDENTIFIER);
+                assert_eq!(blocks[0].r#type, "text");
+                assert_eq!(blocks[1].text, "Original block content.");
+            }
+            _ => panic!("Expected SystemPrompt::Blocks with Claude Code identifier as first block"),
+        }
+    }
+
+    #[test]
+    fn test_inject_system_prompt_api_key_unchanged() {
+        let provider = create_api_key_provider();
+        let mut request = create_base_request();
+        request.system = Some(SystemPrompt::Text("Original system prompt.".to_string()));
+
+        let result = provider.inject_claude_code_system_prompt(request);
+
+        match result.system {
+            Some(SystemPrompt::Text(text)) => {
+                // Should be unchanged - no Claude Code identifier prepended
+                assert_eq!(text, "Original system prompt.");
+            }
+            _ => panic!("Expected unchanged SystemPrompt::Text"),
+        }
+    }
+
+    #[test]
+    fn test_inject_system_prompt_api_key_no_system_unchanged() {
+        let provider = create_api_key_provider();
+        let request = create_base_request();
+
+        let result = provider.inject_claude_code_system_prompt(request);
+
+        // Should remain None for API key authentication
+        assert!(result.system.is_none());
+    }
+
+    #[test]
+    fn test_is_oauth_with_oauth_config() {
+        let provider = create_oauth_provider();
+        assert!(provider.is_oauth());
+    }
+
+    #[test]
+    fn test_is_oauth_without_oauth_config() {
+        let provider = create_api_key_provider();
+        assert!(!provider.is_oauth());
     }
 }
