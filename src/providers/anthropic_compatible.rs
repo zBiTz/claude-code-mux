@@ -468,10 +468,11 @@ mod tests {
     fn create_oauth_provider() -> AnthropicCompatibleProvider {
         // Create a provider with OAuth configured (oauth_provider and token_store are Some)
         // Note: We don't need real tokens for testing inject_claude_code_system_prompt
-        let token_store = TokenStore::new(std::path::PathBuf::from("/tmp/test_tokens.json")).ok();
+        let temp_path = std::env::temp_dir().join("ccm_test_tokens.json");
+        let token_store = TokenStore::new(temp_path).ok();
         AnthropicCompatibleProvider::new(
             "test-oauth".to_string(),
-            String::new(), // Empty API key for OAuth
+            "oauth-test-no-api-key".to_string(), // Explicit test value for OAuth (not used)
             "https://api.anthropic.com".to_string(),
             vec!["claude-sonnet-4-20250514".to_string()],
             Some("anthropic-oauth".to_string()),
